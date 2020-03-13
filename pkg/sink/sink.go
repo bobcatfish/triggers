@@ -32,6 +32,7 @@ import (
 	"github.com/tektoncd/triggers/pkg/interceptors/cel"
 	"github.com/tektoncd/triggers/pkg/interceptors/github"
 	"github.com/tektoncd/triggers/pkg/interceptors/gitlab"
+	"github.com/tektoncd/triggers/pkg/interceptors/rego"
 	"github.com/tektoncd/triggers/pkg/interceptors/webhook"
 	"github.com/tektoncd/triggers/pkg/resources"
 	"github.com/tektoncd/triggers/pkg/template"
@@ -69,6 +70,7 @@ type Response struct {
 
 // HandleEvent processes an incoming HTTP event for the event listener.
 func (r Sink) HandleEvent(response http.ResponseWriter, request *http.Request) {
+	r.Logger.Infof("GOT AN EVENTTTT BEEEEEYOTTTCH %s", request)
 	el, err := r.TriggersClient.TektonV1alpha1().EventListeners(r.EventListenerNamespace).Get(r.EventListenerName, metav1.GetOptions{})
 	if err != nil {
 		r.Logger.Fatalf("Error getting EventListener %s in Namespace %s: %s", r.EventListenerName, r.EventListenerNamespace, err)
@@ -92,6 +94,7 @@ func (r Sink) HandleEvent(response http.ResponseWriter, request *http.Request) {
 	for _, t := range el.Spec.Triggers {
 		go func(t triggersv1.EventListenerTrigger) {
 			localRequest := request.Clone(request.Context())
+			// TODO: drops err
 			if err := r.processTrigger(&t, localRequest, event, eventID, eventLog); err != nil {
 				result <- http.StatusAccepted
 				return
@@ -130,6 +133,7 @@ func (r Sink) processTrigger(t *triggersv1.EventListenerTrigger, request *http.R
 
 	finalPayload, header, err := r.executeInterceptors(t, request, event, eventID, log)
 	if err != nil {
+		// TODO: context
 		return err
 	}
 
@@ -179,7 +183,10 @@ func (r Sink) executeInterceptors(t *triggersv1.EventListenerTrigger, in *http.R
 			interceptor = gitlab.NewInterceptor(i.GitLab, r.KubeClientSet, r.EventListenerNamespace, log)
 		case i.CEL != nil:
 			interceptor = cel.NewInterceptor(i.CEL, log)
+		case i.Rego != nil:
+			interceptor = rego.NewInterceptor(i.Rego, log)
 		default:
+			// TODO: do something with err???
 			return nil, nil, fmt.Errorf("unknown interceptor type: %v", i)
 		}
 		var err error

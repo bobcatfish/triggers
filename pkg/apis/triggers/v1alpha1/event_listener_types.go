@@ -75,6 +75,7 @@ type EventInterceptor struct {
 	GitHub  *GitHubInterceptor  `json:"github,omitempty"`
 	GitLab  *GitLabInterceptor  `json:"gitlab,omitempty"`
 	CEL     *CELInterceptor     `json:"cel,omitempty"`
+	Rego    *RegoInterceptor    `json:"rego,omitempty"`
 }
 
 // WebhookInterceptor provides a webhook to intercept and pre-process events
@@ -111,6 +112,11 @@ type CELInterceptor struct {
 type CELOverlay struct {
 	Key        string `json:"key,omitempty"`
 	Expression string `json:"expression,omitempty"`
+}
+
+// RegoInterceptor provides a webhook to intercept and pre-process events using Rego
+type RegoInterceptor struct {
+	Source string `json:"source,omitempty"`
 }
 
 // SecretRef contains the information required to reference a single secret string

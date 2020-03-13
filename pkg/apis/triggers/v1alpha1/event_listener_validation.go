@@ -80,7 +80,7 @@ func (t *EventListenerTrigger) validate(ctx context.Context) *apis.FieldError {
 }
 
 func (i *EventInterceptor) validate(ctx context.Context) *apis.FieldError {
-	if i.Webhook == nil && i.GitHub == nil && i.GitLab == nil && i.CEL == nil {
+	if i.Webhook == nil && i.GitHub == nil && i.GitLab == nil && i.CEL == nil && i.Rego == nil {
 		return apis.ErrMissingField("interceptor")
 	}
 

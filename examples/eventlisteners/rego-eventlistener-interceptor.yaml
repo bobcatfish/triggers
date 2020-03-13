@@ -1,0 +1,179 @@
+# TODO(pipeline#1986) Once we have some kind of "auto workspace mode" we can avoid
+# having to manually create a PVC and manually clear it repeatedly
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: shared-task-storage
+spec:
+  resources:
+    requests:
+      storage: 16Mi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+---
+apiVersion: tekton.dev/v1alpha1
+kind: TriggerBinding
+metadata:
+  name: rego-binding
+spec:
+  params:
+  - name: gitsha
+    value: $(body.extensions.truncated_sha)
+  - name: gitrepositoryurl
+    value: $(body.repository.url)
+  - name: pullrequesturl
+    value: $(body.pull_request.html_url)
+---
+apiVersion: tekton.dev/v1alpha1
+kind: EventListener
+metadata:
+  name: rego-listener-interceptor
+spec:
+  serviceAccountName: tekton-triggers-example-sa
+  serviceType: LoadBalancer
+  triggers:
+    - name: rego-trig-with-matches
+      interceptors:
+        - github:
+            secretRef:
+              secretName: webhook-secret
+              secretKey: secret
+        - rego:
+            source: |
+              package main
+
+              default filter = false
+
+              filter {
+                input.header[k][i] == "pull_request"
+                lower(k) == "x-github-event"
+              }
+              
+              default overlay = {}
+
+              overlay = {
+                "extensions": {
+                   "truncated_sha": substring(input.body.pull_request.head.sha, 0, 7),
+                }
+              }
+      bindings:
+      - name: rego-binding
+      template:
+        name: rego-trigger-template
+---
+apiVersion: tekton.dev/v1alpha1
+kind: TriggerTemplate
+metadata:
+  name: rego-trigger-template
+spec:
+  params:
+    - name: gitsha
+    - name: gitrepositoryurl
+    - name: pullrequesturl
+    - name: secret-key-ref
+      default: webhook-secret
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1beta1
+      kind: PipelineRun
+      metadata:
+        name: rego-pipeline-$(uid)
+      spec:
+        workspaces:
+        - name: pr
+          persistentVolumeClaim:
+            claimName: shared-task-storage
+        pipelineSpec:
+          workspaces:
+          - name: pr
+          tasks:
+          - name: pull-request-fetch
+            taskRef:
+              name: pull-request
+            workspaces:
+            - name: pr
+              workspace: pr
+            params:
+            - name: mode
+              value: download
+            - name: url
+              value: $(params.pullrequesturl)
+            - name: provider
+              value: github
+            - name: secret-key-ref
+              value: $(params.secret-key-ref)
+          - name: add-comment
+            runAfter: [pull-request-fetch]
+            workspaces:
+            - name: pr
+              workspace: pr
+            taskSpec:
+              workspaces:
+              - name: pr
+              steps:
+              - name: write-comment
+                image: ubuntu
+                script: |
+                  #!/usr/bin/env bash
+                  set -xe
+                  NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+                  COMMENT="$NOW $(params.gitsha)"
+                  echo $COMMENT > $(workspaces.pr.path)/comments/$NOW
+          - name: pull-request-update
+            runAfter: [add-comment]
+            taskRef:
+              name: pull-request
+            workspaces:
+            - name: pr
+              workspace: pr
+            params:
+            - name: mode
+              value: upload
+            - name: url
+              value: $(params.pullrequesturl)
+            - name: provider
+              value: github
+            - name: secret-key-ref
+              value: $(params.secret-key-ref)
+---
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: pull-request
+spec:
+  params:
+  - name: mode
+    description: If "download", the state of the pull request at `url` will be fetched. If "upload" then the pull request at `url` will be updated.
+  - name: url
+    description: The URL of the Pull Reuqest, e.g. `https://github.com/bobcatfish/catservice/pull/16`
+  - name: provider
+    description: The type of SCM system, currently `github` or `gitlab`
+  - name: secret-key-ref
+    description: The name of an opaque secret containing a key called "token" with a base64 encoded SCM token
+  - name: insecure-skip-tls-verify
+    description: If "true", certificate validation will be disabled
+    default: "false"
+  workspaces:
+  - name: pr
+  - name: auth-token
+  steps:
+  - name: pullrequest-init
+    image: gcr.io/tekton-releases/github.com/tektoncd/pipeline/cmd/pullrequest-init:v0.11.0-rc2@sha256:1fd24693b3c5fe86d90f55f07c14698018a8e6ab76223f717897871719936915
+    command: ["/ko-app/pullrequest-init"]
+    env:
+    - name: AUTH_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: $(params.secret-key-ref)
+          key: token
+    args:
+    - "-url"
+    - "$(params.url)"
+    - "-path"
+    - "$(workspaces.pr.path)"
+    - "-mode"
+    - "$(params.mode)"
+    - "-provider"
+    - "$(params.provider)"
+    - "-insecure-skip-tls-verify"
+    - "$(params.insecure-skip-tls-verify)"
